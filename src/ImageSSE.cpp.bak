@@ -1,0 +1,711 @@
+#include "ImageSSE.h"
+
+namespace ImageTL
+{
+	ImageSSE::ImageSSE(int width, int height)
+	{
+		m_width  = width;
+		m_height = height;
+		try
+		{
+			m_image = allocateImage();
+		}
+		catch(std::bad_alloc &e)
+		{
+			std::stringstream msg_stream;
+
+			msg_stream<<"Image: Error allocating memory for a "<<m_width<<"x"<<m_height<<" image:  "<<e.what()<<std::endl;
+			msg_stream<<"Image: Aborting...";
+			throw ImageException(msg_stream.str());
+		}
+	}
+
+	ImageSSE::ImageSSE(const Image<float> &im, bool copy)
+	{
+		m_width  = im.width();
+		m_height = im.height();
+		try
+		{
+			m_image = allocateImage();
+		}
+		catch(std::bad_alloc &e)
+		{
+			std::stringstream msg_stream;
+
+			msg_stream<<"Image: Error allocating memory for a "<<m_width<<"x"<<m_height<<" image:  "<<e.what()<<std::endl;
+			msg_stream<<"Image: Aborting...";
+			throw ImageException(msg_stream.str());
+		}
+		if(copy)
+		{
+			Image<float>::iterator iterCopy = im.begin();
+			iterator e = end();
+			for(iterator iter = begin(); iter != e; ++iter, ++iterCopy) {
+				*iter = *iterCopy; }
+		}
+	}
+
+	ImageSSE::ImageSSE(const ImageSSE &im, bool copy)
+	{
+		m_width  = im.m_width;
+		m_height = im.m_height;
+		try
+		{
+			m_image = allocateImage();
+		}
+		catch(std::bad_alloc &e)
+		{
+			std::stringstream msg_stream;
+
+			msg_stream<<"Image: Error allocating memory for a "<<m_width<<"x"<<m_height<<" image:  "<<e.what()<<std::endl;
+			msg_stream<<"Image: Aborting...";
+			throw ImageException(msg_stream.str());
+		}
+		if(copy) {
+			copyImage(m_image, im.m_image); }
+	}
+
+	ImageSSE::~ImageSSE()
+	{
+		freeImage(m_image);
+		m_image = NULL;
+	}
+
+	float* ImageSSE::allocateImage() throw(ImageException)
+	{
+		// Since each iteration of the loop processes CACHEBLOCK bytes,
+		// we must allocate memory in blocks of the same size
+		m_allocateSize = m_width*m_height*sizeof(float);
+		if(m_allocateSize%CACHEBLOCK != 0) {
+			m_allocateSize += CACHEBLOCK - m_allocateSize%CACHEBLOCK; }
+
+		float* im = (float*)_mm_malloc(m_allocateSize, 16);
+		if(im == NULL) {
+			throw std::bad_alloc(); }
+
+		return im;
+	}
+
+	void ImageSSE::freeImage(float* im)
+	{
+		if(im != NULL) {
+			_mm_free(im); }
+	}
+
+	/*void ImageSSE::copyImage(float* to, const float* from)
+	{
+	}*/
+
+	ImageSSE& ImageSSE::operator+=(const ImageSSE& right)
+	{
+		if(m_height == right.m_height && m_width == right.m_width)
+		{
+			int loopLength = (m_allocateSize)/8;	// The number of 8 byte DWORDs in the array
+
+			// Get pointers for the images
+			float *pLeft = m_image, *pRight = right.m_image;
+
+			__asm
+			{
+				mov  edi, pLeft						// load the address of the start of the left image
+				mov  esi, pRight					// load the address of the start of the right image
+				mov  ecx, loopLength				// load the number of times to loop
+
+				lea  esi, [esi+ecx*8]				// end of source
+				lea  edi, [edi+ecx*8]				// end of destination
+				neg  ecx							// use a negative offset
+				emms
+
+			LOOP_START:
+				mov  eax, CACHEBLOCK / 256			// setup eax for prefetch loop (256 bytes to process in each loop)
+
+			// prefetch the source array
+			LOOP_PREFETCH_1:
+				mov  edx, [esi+ecx*8]
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [esi+ecx*8+0x20]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [esi+ecx*8+0x40]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [esi+ecx*8+0x60]
+			#endif
+			#if CACHE_LINE_SIZE <= 128
+				mov  edx, [esi+ecx*8+0x80]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [esi+ecx*8+0xA0]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [esi+ecx*8+0xC0]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [esi+ecx*8+0xE0]
+			#endif
+				add  ecx, 32						// (32 DWORDs processed (256 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PREFETCH_1				// loop if it's not zero
+				sub  ecx, CACHEBLOCK / 8			// reset ecx to what it was before the prefetch loop
+
+				mov  eax, CACHEBLOCK / 256			// setup eax for prefetch loop (256 bytes to process in each loop)
+
+			// prefetch the destination array (also source 2)
+			LOOP_PREFETCH_2:
+				mov  edx, [edi+ecx*8]
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [edi+ecx*8+0x20]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [edi+ecx*8+0x40]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [edi+ecx*8+0x60]
+			#endif
+			#if CACHE_LINE_SIZE <= 128
+				mov  edx, [edi+ecx*8+0x80]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [edi+ecx*8+0xA0]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [edi+ecx*8+0xC0]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [edi+ecx*8+0xE0]
+			#endif
+				add  ecx, 32						// 32 DWORDs processed (256 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PREFETCH_2				// loop if it's not zero
+				sub  ecx, CACHEBLOCK / 8			// reset ecx to what it was before the prefetch loop
+
+				mov  eax, CACHEBLOCK / 64			// setup eax for process loop (64 bytes to process in each loop)
+
+			LOOP_PROCESS:
+				// load 4x4 source points into xmm0-3
+				movaps xmm0, [esi+ecx*8]
+				movaps xmm1, [esi+ecx*8+0x10]
+				movaps xmm2, [esi+ecx*8+0x20]
+				movaps xmm3, [esi+ecx*8+0x30]
+
+				// load 4x4 destination (and source 2) points into xmm4-7
+				movaps xmm4, [edi+ecx*8]
+				movaps xmm5, [edi+ecx*8+0x10]
+				movaps xmm6, [edi+ecx*8+0x20]
+				movaps xmm7, [edi+ecx*8+0x30]
+
+				// add xmm0-3 to xmm4-7
+				addps  xmm4, xmm0
+				addps  xmm5, xmm1
+				addps  xmm6, xmm2
+				addps  xmm7, xmm3
+
+				// store the modified points back to their original locations
+				movaps [edi+ecx*8],      xmm4
+				movaps [edi+ecx*8+0x10], xmm5
+				movaps [edi+ecx*8+0x20], xmm6
+				movaps [edi+ecx*8+0x30], xmm7
+
+				// end-of-loop check
+				add  ecx, 8							// 8 DWORDs processed (64 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PROCESS					// loop if it's not zero
+				or   ecx, ecx						// if ecx is >=0,
+				jge  EXIT							// then exit since the entire array has been processed
+
+				jmp  LOOP_START						// loop back to prefetching
+
+			EXIT:
+				emms								// clear the mmx registers
+			}
+		}
+		else {
+			throw ImageException("ImageSSE::operator+= [Unmatched dimensions on assignment]"); }
+
+		return *this;
+	}
+
+	ImageSSE& ImageSSE::operator+=(float right)
+	{
+		// SSE
+		if(m_image != NULL)
+		{
+			int loopLength = (m_allocateSize)/8;	// The number of 8 byte DWORDs in the array
+
+			// Get pointers for the images
+			float *pLeft = m_image, *pRight = &right;
+
+			__asm
+			{
+				mov  edi,  pLeft					// load the address of the start of the image
+				mov  esi,  pRight					// load the address of right
+				mov  ecx,  loopLength				// load the number of times to loop
+
+				lea  edi, [edi+ecx*8]				// end of destination
+				neg  ecx							// use a negative offset
+				emms
+
+				movss  xmm0, [esi]					// load right into the lower float of mmx register 0
+				shufps xmm0, xmm0, 0x00				// shuffle the register to put right in every float
+
+			LOOP_START:
+				mov  eax, CACHEBLOCK / 256			// setup eax for prefetch loop (256 bytes to process in each loop)
+
+			// prefetch the destination (and source) array
+			LOOP_PREFETCH_1:
+				mov  edx, [edi+ecx*8]
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [edi+ecx*8+0x20]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [edi+ecx*8+0x40]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [edi+ecx*8+0x60]
+			#endif
+			#if CACHE_LINE_SIZE <= 128
+				mov  edx, [edi+ecx*8+0x80]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [edi+ecx*8+0xA0]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [edi+ecx*8+0xC0]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [edi+ecx*8+0xE0]
+			#endif
+				add  ecx, 32						// 32 DWORDs processed (256 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PREFETCH_1				// loop if it's not zero
+				sub  ecx, CACHEBLOCK / 8			// reset ecx to what it was before the prefetch loop
+
+				mov  eax, CACHEBLOCK / 64			// setup eax for process loop (64 bytes to process in each loop)
+
+			LOOP_PROCESS:
+				// load 4x4 destination (and source) points into xmm1-4
+				movaps xmm1, [edi+ecx*8]
+				movaps xmm2, [edi+ecx*8+0x10]
+				movaps xmm3, [edi+ecx*8+0x20]
+				movaps xmm4, [edi+ecx*8+0x30]
+
+				// add xmm0 to xmm1-4
+				addps  xmm1, xmm0
+				addps  xmm2, xmm0
+				addps  xmm3, xmm0
+				addps  xmm4, xmm0
+
+				// store the modified points back to their original locations
+				movaps [edi+ecx*8],      xmm1
+				movaps [edi+ecx*8+0x10], xmm2
+				movaps [edi+ecx*8+0x20], xmm3
+				movaps [edi+ecx*8+0x30], xmm4
+
+				// end-of-loop check
+				add  ecx, 8							// 8 DWORDs processed (64 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PROCESS					// loop if it's not zero
+				or   ecx, ecx						// if ecx is >=0,
+				jge  EXIT							// then exit since the entire array has been processed
+
+				jmp  LOOP_START						// loop back to prefetching
+
+			EXIT:
+				emms								// clear the mmx registers
+			}
+		}
+		else {
+			throw ImageException("ImageSSE::operator+= [No image dimensions on assignment]"); }
+
+		return *this;
+	}
+
+	ImageSSE ImageSSE::operator+(const ImageSSE& right) const
+	{
+		ImageSSE newImage(m_width, m_height);
+
+		if(m_height == right.m_height && m_width == right.m_width)
+		{
+			int loopLength = (m_allocateSize)/8;	// The number of 8 byte DWORDs in the array
+
+			// Get pointers for the images
+			float *pLeft = m_image, *pRight = right.m_image, *pDest = newImage.m_image;
+
+			__asm
+			{
+				mov  ebx, pLeft						// load the address of the start of the left image
+				mov  esi, pRight					// load the address of the start of the right image
+				mov  edi, pDest						// load the address of the start of the destination image
+				mov  ecx, loopLength				// load the number of times to loop
+
+				lea  ebx, [ebx+ecx*8]				// end of left source
+				lea  esi, [esi+ecx*8]				// end of right source
+				lea  edi, [edi+ecx*8]				// end of destination
+				neg  ecx							// use a negative offset
+				emms
+
+			LOOP_START:
+				mov  eax, CACHEBLOCK / 256			// setup eax for prefetch loop (256 bytes to process in each loop)
+
+			// prefetch the left source array
+			LOOP_PREFETCH_1:
+				mov  edx, [ebx+ecx*8]
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [ebx+ecx*8+0x20]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [ebx+ecx*8+0x40]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [ebx+ecx*8+0x60]
+			#endif
+			#if CACHE_LINE_SIZE <= 128
+				mov  edx, [ebx+ecx*8+0x80]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [ebx+ecx*8+0xA0]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [ebx+ecx*8+0xC0]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [ebx+ecx*8+0xE0]
+			#endif
+				add  ecx, 32						// (32 DWORDs processed (256 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PREFETCH_1				// loop if it's not zero
+				sub  ecx, CACHEBLOCK / 8			// reset ecx to what it was before the prefetch loop
+
+				mov  eax, CACHEBLOCK / 256			// setup eax for prefetch loop (256 bytes to process in each loop)
+
+			// prefetch the source right array
+			LOOP_PREFETCH_2:
+				mov  edx, [esi+ecx*8]
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [esi+ecx*8+0x20]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [esi+ecx*8+0x40]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [esi+ecx*8+0x60]
+			#endif
+			#if CACHE_LINE_SIZE <= 128
+				mov  edx, [esi+ecx*8+0x80]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [esi+ecx*8+0xA0]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [esi+ecx*8+0xC0]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [esi+ecx*8+0xE0]
+			#endif
+				add  ecx, 32						// (32 DWORDs processed (256 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PREFETCH_2				// loop if it's not zero
+				sub  ecx, CACHEBLOCK / 8			// reset ecx to what it was before the prefetch loop
+
+				mov  eax, CACHEBLOCK / 64			// setup eax for process loop (64 bytes to process in each loop)
+
+			LOOP_PROCESS:
+				// load 4x4 left source points into xmm0-3
+				movaps xmm0, [ebx+ecx*8]
+				movaps xmm1, [ebx+ecx*8+0x10]
+				movaps xmm2, [ebx+ecx*8+0x20]
+				movaps xmm3, [ebx+ecx*8+0x30]
+
+				// load 4x4 right source points into xmm4-7
+				movaps xmm4, [esi+ecx*8]
+				movaps xmm5, [esi+ecx*8+0x10]
+				movaps xmm6, [esi+ecx*8+0x20]
+				movaps xmm7, [esi+ecx*8+0x30]
+
+				// add xmm0-3 to xmm4-7
+				addps  xmm4, xmm0
+				addps  xmm5, xmm1
+				addps  xmm6, xmm2
+				addps  xmm7, xmm3
+
+				// store the modified points back to their original locations
+				movntps [edi+ecx*8],      xmm4
+				movntps [edi+ecx*8+0x10], xmm5
+				movntps [edi+ecx*8+0x20], xmm6
+				movntps [edi+ecx*8+0x30], xmm7
+
+				// end-of-loop check
+				add  ecx, 8							// 8 DWORDs processed (64 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PROCESS					// loop if it's not zero
+				or   ecx, ecx						// if ecx is >=0,
+				jge  EXIT							// then exit since the entire array has been processed
+
+				jmp  LOOP_START						// loop back to prefetching
+
+			EXIT:
+				emms								// clear the mmx registers
+			}
+		}
+		else {
+			throw ImageException("ImageSSE::operator+ [Unmatched dimensions for operator]"); }
+
+		return newImage;
+	}
+
+	ImageSSE ImageSSE::operator+(float right) const
+	{
+		ImageSSE newImage(m_width, m_height);
+
+		if(m_image != NULL)
+		{
+			int loopLength = (m_allocateSize)/8;	// The number of 8 byte DWORDs in the array
+
+			// Get pointers for the images
+			float *pLeft = m_image, *pRight = &right, *pDest = newImage.m_image;
+
+			__asm
+			{
+				mov  ebx, pLeft						// load the address of the start of the left image
+				mov  esi, pRight					// load the address of right
+				mov  edi, pDest						// load the address of the start of the destination image
+				mov  ecx, loopLength				// load the number of times to loop
+
+				lea  ebx, [ebx+ecx*8]				// end of left source
+				lea  edi, [edi+ecx*8]				// end of destination
+				neg  ecx							// use a negative offset
+				emms
+
+				movss  xmm0, [esi]					// load right into the lower float of mmx register 0
+				shufps xmm0, xmm0, 0x00				// shuffle the register to put right in every float
+
+			LOOP_START:
+				mov  eax, CACHEBLOCK / 256			// setup eax for prefetch loop (256 bytes to process in each loop)
+
+			// prefetch the left source array
+			LOOP_PREFETCH_1:
+				mov  edx, [ebx+ecx*8]
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [ebx+ecx*8+0x20]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [ebx+ecx*8+0x40]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [ebx+ecx*8+0x60]
+			#endif
+			#if CACHE_LINE_SIZE <= 128
+				mov  edx, [ebx+ecx*8+0x80]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [ebx+ecx*8+0xA0]
+			#endif
+			#if CACHE_LINE_SIZE <= 64
+				mov  edx, [ebx+ecx*8+0xC0]
+			#endif
+			#if CACHE_LINE_SIZE == 32
+				mov  edx, [ebx+ecx*8+0xE0]
+			#endif
+				add  ecx, 32						// (32 DWORDs processed (256 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PREFETCH_1				// loop if it's not zero
+				sub  ecx, CACHEBLOCK / 8			// reset ecx to what it was before the prefetch loop
+
+				mov  eax, CACHEBLOCK / 256			// setup eax for prefetch loop (256 bytes to process in each loop)
+
+			LOOP_PROCESS:
+				// load 4x4 left source points into xmm0-3
+				movaps xmm1, [ebx+ecx*8]
+				movaps xmm2, [ebx+ecx*8+0x10]
+				movaps xmm3, [ebx+ecx*8+0x20]
+				movaps xmm4, [ebx+ecx*8+0x30]
+
+				// add xmm0 to xmm1-4
+				addps  xmm1, xmm0
+				addps  xmm2, xmm0
+				addps  xmm3, xmm0
+				addps  xmm4, xmm0
+
+				// store the modified points back to their original locations
+				movntps [edi+ecx*8],      xmm1
+				movntps [edi+ecx*8+0x10], xmm2
+				movntps [edi+ecx*8+0x20], xmm3
+				movntps [edi+ecx*8+0x30], xmm4
+
+				// end-of-loop check
+				add  ecx, 8							// 8 DWORDs processed (64 bytes)
+				dec  eax							// decrement loop counter
+				jnz  LOOP_PROCESS					// loop if it's not zero
+				or   ecx, ecx						// if ecx is >=0,
+				jge  EXIT							// then exit since the entire array has been processed
+
+				jmp  LOOP_START						// loop back to prefetching
+
+			EXIT:
+				emms								// clear the mmx registers
+			}
+		}
+		else {
+			throw ImageException("ImageSSE::operator+ [No dimensions for operator]"); }
+
+		return newImage;
+	}
+
+	// Operators
+	ImageSSE& ImageSSE::operator=(const Image<float>& right)
+	{
+		if(m_height != right.height() || m_width != right.width())
+		{
+			freeImage(m_image);
+
+			m_width  = right.width();
+			m_height = right.height();
+
+			m_image = allocateImage();
+		}
+
+		Image<float>::iterator iterCopy = right.begin();
+		iterator e = end();
+		for(iterator iter = begin(); iter != e; ++iter, ++iterCopy) {
+			*iter = *iterCopy; }
+
+		return *this;
+	}
+
+	ImageSSE& ImageSSE::operator=(const ImageSSE& right)
+	{
+		if(m_height != right.m_height || m_width != right.m_width)
+		{
+			freeImage(m_image);
+
+			m_width  = right.m_width;
+			m_height = right.m_height;
+
+			m_image = allocateImage();
+		}
+
+		int loopLength = (m_allocateSize)/8;	// The number of 8 byte DWORDs in the array
+
+		// Get pointers for the images
+		float *pLeft = m_image, *pRight = right.m_image;
+
+		__asm
+		{
+			mov  edi, pLeft						// load the address of the start of the left image
+			mov  esi, pRight					// load the address of the start of the right image
+			mov  ecx, loopLength				// load the number of times to loop
+
+			lea  esi, [esi+ecx*8]				// end of source
+			lea  edi, [edi+ecx*8]				// end of destination
+			neg  ecx							// use a negative offset
+			emms
+
+		LOOP_START:
+			mov  eax, CACHEBLOCK / 256			// setup eax for prefetch loop (256 bytes to process in each loop)
+
+		// prefetch the source array
+		LOOP_PREFETCH_1:
+			mov  edx, [esi+ecx*8]
+		#if CACHE_LINE_SIZE == 32
+			mov  edx, [esi+ecx*8+0x20]
+		#endif
+		#if CACHE_LINE_SIZE <= 64
+			mov  edx, [esi+ecx*8+0x40]
+		#endif
+		#if CACHE_LINE_SIZE == 32
+			mov  edx, [esi+ecx*8+0x60]
+		#endif
+		#if CACHE_LINE_SIZE <= 128
+			mov  edx, [esi+ecx*8+0x80]
+		#endif
+		#if CACHE_LINE_SIZE == 32
+			mov  edx, [esi+ecx*8+0xA0]
+		#endif
+		#if CACHE_LINE_SIZE <= 64
+			mov  edx, [esi+ecx*8+0xC0]
+		#endif
+		#if CACHE_LINE_SIZE == 32
+			mov  edx, [esi+ecx*8+0xE0]
+		#endif
+			add  ecx, 32						// (32 DWORDs processed (256 bytes)
+			dec  eax							// decrement loop counter
+			jnz  LOOP_PREFETCH_1				// loop if it's not zero
+			sub  ecx, CACHEBLOCK / 8			// reset ecx to what it was before the prefetch loop
+
+			mov  eax, CACHEBLOCK / 128			// setup eax for process loop (128 bytes to process in each loop)
+
+		LOOP_PROCESS:
+			// load 8x4 source points into xmm0-7
+			movaps xmm0, [esi+ecx*8]
+			movaps xmm1, [esi+ecx*8+0x10]
+			movaps xmm2, [esi+ecx*8+0x20]
+			movaps xmm3, [esi+ecx*8+0x30]
+			movaps xmm4, [esi+ecx*8+0x40]
+			movaps xmm5, [esi+ecx*8+0x50]
+			movaps xmm6, [esi+ecx*8+0x60]
+			movaps xmm7, [esi+ecx*8+0x70]
+
+			// store the points to the destination array
+			movntps [edi+ecx*8],      xmm0
+			movntps [edi+ecx*8+0x10], xmm1
+			movntps [edi+ecx*8+0x20], xmm2
+			movntps [edi+ecx*8+0x30], xmm3
+			movntps [edi+ecx*8+0x40], xmm4
+			movntps [edi+ecx*8+0x50], xmm5
+			movntps [edi+ecx*8+0x60], xmm6
+			movntps [edi+ecx*8+0x70], xmm7
+
+			// end-of-loop check
+			add  ecx, 16						// 16 DWORDs processed (128 bytes)
+			dec  eax							// decrement loop counter
+			jnz  LOOP_PROCESS					// loop if it's not zero
+			or   ecx, ecx						// if ecx is >=0,
+			jge  EXIT							// then exit since the entire array has been processed
+
+			jmp  LOOP_START						// loop back to prefetching
+
+		EXIT:
+			emms								// clear the mmx registers
+		}
+
+		return *this;
+	}
+
+	ImageSSE& ImageSSE::operator=(float right)
+	{
+		if(m_image != NULL)
+		{
+			int loopLength = m_allocateSize/(8 * 16);
+			// Get a pointer for the image and the float to add
+			float *whydoineedthis = m_image, *pRight = &right;
+			__asm
+			{
+
+				mov     edi,  whydoineedthis		// load the address of the start of the image
+				mov     esi,  pRight				// load the address of right
+				mov     ecx,  loopLength			// load the number of times to loop
+				movss   xmm0, [esi]					// load right into the lower float of mmx register 0
+				shufps  xmm0, xmm0, 0x00			// shuffle the register to put right in every float
+
+			LOOP_START:
+				movaps  [edi],      xmm0			// store the constant into 4 points (16 bytes) of the image
+				movaps  [edi+0x10], xmm0			// store the constant into 4 points (16 bytes) of the image
+				movaps  [edi+0x20], xmm0			// store the constant into 4 points (16 bytes) of the image
+				movaps  [edi+0x30], xmm0			// store the constant into 4 points (16 bytes) of the image
+				movaps  [edi+0x40], xmm0			// store the constant into 4 points (16 bytes) of the image
+				movaps  [edi+0x50], xmm0			// store the constant into 4 points (16 bytes) of the image
+				movaps  [edi+0x60], xmm0			// store the constant into 4 points (16 bytes) of the image
+				movaps  [edi+0x70], xmm0			// store the constant into 4 points (16 bytes) of the image
+				add     edi, 0x80					// move the address up 16*8=128 bytes
+
+				dec ecx								// decrement the counter
+				jnz LOOP_START						// if not zero, loop
+				emms								// clear the mmx registers
+			}
+		}
+		else {
+			throw ImageException("ImageSSE: No image dimensions for =(constant) assignment"); }
+
+		return *this;
+	}
+}

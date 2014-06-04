@@ -1,0 +1,59 @@
+#ifndef __IMAGE_SSE_H__
+#define __IMAGE_SSE_H__
+
+//#define PENTIUM_3
+//#define PENTIUM_4
+#define ATHLON_XP
+
+#if defined PENTIUM_3
+	#define CACHE_LINE_SIZE 32
+#elif defined PENTIUM_4
+	#define CACHE_LINE_SIZE 128
+#elif defined ATHLON_XP
+	#define CACHE_LINE_SIZE 64
+#endif
+
+//#include <mm3dnow.h>
+#include <xmmintrin.h>
+#include <malloc.h>
+#include "Image.h"
+
+#define _m_from_floats(f) (*(__m64 *)(f))
+#define _m128_from_floats(f) (*(__m128 *)(f))
+
+#define CACHEBLOCK 0x4000						// number of bytes to process in each iteration
+
+namespace ImageTL
+{
+	class ImageSSE: public Image<float>
+	{
+	public:
+		ImageSSE() : Image<float>() {}
+		ImageSSE(int width, int height);
+		ImageSSE(const Image<float> &im, bool copy = true);
+		ImageSSE(const ImageSSE &im, bool copy = true);
+		~ImageSSE();
+
+		// Operators (= operator is not inherited)
+		ImageSSE& operator=(const Image<float>&);
+		ImageSSE& operator=(const ImageSSE&);
+		ImageSSE& operator=(float);
+
+		ImageSSE& operator+=(const ImageSSE&);
+		ImageSSE& operator+=(float);
+
+		ImageSSE operator+(const ImageSSE&) const;
+		ImageSSE operator+(float) const;
+
+	protected:
+		// Redefine the allocation functions to align the memory on 16bits for SSE
+		float* allocateImage() throw(ImageException);
+		void   freeImage(float*);
+		//void   copyImage(float* to, const float* from);
+
+		int m_allocateSize;		// Stores the actual number of bytes allocated
+								// The memory is allocated in CACHEBLOCK byte intervals
+	};
+}
+
+#endif
